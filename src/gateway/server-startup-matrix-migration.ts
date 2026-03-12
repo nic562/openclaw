@@ -12,6 +12,20 @@ type MatrixMigrationLogger = {
   warn?: (message: string) => void;
 };
 
+async function runBestEffortMatrixMigrationStep(params: {
+  label: string;
+  log: MatrixMigrationLogger;
+  run: () => Promise<unknown>;
+}): Promise<void> {
+  try {
+    await params.run();
+  } catch (err) {
+    params.log.warn?.(
+      `gateway: ${params.label} failed during Matrix migration; continuing startup: ${String(err)}`,
+    );
+  }
+}
+
 export async function runStartupMatrixMigration(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -55,14 +69,24 @@ export async function runStartupMatrixMigration(params: {
     return;
   }
 
-  await migrateLegacyState({
-    cfg: params.cfg,
-    env,
+  await runBestEffortMatrixMigrationStep({
+    label: "legacy Matrix state migration",
     log: params.log,
+    run: () =>
+      migrateLegacyState({
+        cfg: params.cfg,
+        env,
+        log: params.log,
+      }),
   });
-  await prepareLegacyCrypto({
-    cfg: params.cfg,
-    env,
+  await runBestEffortMatrixMigrationStep({
+    label: "legacy Matrix encrypted-state preparation",
     log: params.log,
+    run: () =>
+      prepareLegacyCrypto({
+        cfg: params.cfg,
+        env,
+        log: params.log,
+      }),
   });
 }

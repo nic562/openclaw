@@ -185,16 +185,18 @@ export async function maybeMigrateLegacyStorage(params: {
   storagePaths: MatrixStoragePaths;
   env?: NodeJS.ProcessEnv;
 }): Promise<void> {
-  const hasNewStorage =
-    fs.existsSync(params.storagePaths.storagePath) || fs.existsSync(params.storagePaths.cryptoPath);
-  if (hasNewStorage) {
-    return;
-  }
-
   const legacy = resolveLegacyStoragePaths(params.env);
   const hasLegacyStorage = fs.existsSync(legacy.storagePath);
   const hasLegacyCrypto = fs.existsSync(legacy.cryptoPath);
   if (!hasLegacyStorage && !hasLegacyCrypto) {
+    return;
+  }
+  const hasTargetStorage = fs.existsSync(params.storagePaths.storagePath);
+  const hasTargetCrypto = fs.existsSync(params.storagePaths.cryptoPath);
+  // Continue partial migrations one artifact at a time; only skip items whose targets already exist.
+  const shouldMigrateStorage = hasLegacyStorage && !hasTargetStorage;
+  const shouldMigrateCrypto = hasLegacyCrypto && !hasTargetCrypto;
+  if (!shouldMigrateStorage && !shouldMigrateCrypto) {
     return;
   }
 
@@ -210,22 +212,31 @@ export async function maybeMigrateLegacyStorage(params: {
   });
   fs.mkdirSync(params.storagePaths.rootDir, { recursive: true });
   const moved: LegacyMoveRecord[] = [];
+  const skippedExistingTargets: string[] = [];
   try {
-    if (hasLegacyStorage) {
+    if (shouldMigrateStorage) {
       moveLegacyStoragePathOrThrow({
         sourcePath: legacy.storagePath,
         targetPath: params.storagePaths.storagePath,
         label: "sync store",
         moved,
       });
+    } else if (hasLegacyStorage) {
+      skippedExistingTargets.push(
+        `- sync store remains at ${legacy.storagePath} because ${params.storagePaths.storagePath} already exists`,
+      );
     }
-    if (hasLegacyCrypto) {
+    if (shouldMigrateCrypto) {
       moveLegacyStoragePathOrThrow({
         sourcePath: legacy.cryptoPath,
         targetPath: params.storagePaths.cryptoPath,
         label: "crypto store",
         moved,
       });
+    } else if (hasLegacyCrypto) {
+      skippedExistingTargets.push(
+        `- crypto store remains at ${legacy.cryptoPath} because ${params.storagePaths.cryptoPath} already exists`,
+      );
     }
   } catch (err) {
     const rollbackError = rollbackLegacyMoves(moved);
@@ -240,6 +251,11 @@ export async function maybeMigrateLegacyStorage(params: {
       `matrix: migrated legacy client storage into ${params.storagePaths.rootDir}\n${moved
         .map((entry) => `- ${entry.label}: ${entry.sourcePath} -> ${entry.targetPath}`)
         .join("\n")}`,
+    );
+  }
+  if (skippedExistingTargets.length > 0) {
+    logger.warn?.(
+      `matrix: legacy client storage still exists in the flat path because some account-scoped targets already existed.\n${skippedExistingTargets.join("\n")}`,
     );
   }
 }

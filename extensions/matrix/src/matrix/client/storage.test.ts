@@ -112,6 +112,32 @@ describe("matrix client storage paths", () => {
     expect(fs.existsSync(storagePaths.cryptoPath)).toBe(true);
   });
 
+  it("continues migrating whichever legacy artifact is still missing", async () => {
+    const stateDir = setupStateDir();
+    const storagePaths = resolveMatrixStoragePaths({
+      homeserver: "https://matrix.example.org",
+      userId: "@bot:example.org",
+      accessToken: "secret-token",
+      env: {},
+    });
+    const legacyRoot = path.join(stateDir, "matrix");
+    fs.mkdirSync(storagePaths.rootDir, { recursive: true });
+    fs.writeFileSync(storagePaths.storagePath, '{"new":true}');
+    fs.mkdirSync(path.join(legacyRoot, "crypto"), { recursive: true });
+
+    await maybeMigrateLegacyStorage({
+      storagePaths,
+      env: {},
+    });
+
+    expect(maybeCreateMatrixMigrationSnapshotMock).toHaveBeenCalledWith(
+      expect.objectContaining({ trigger: "matrix-client-fallback" }),
+    );
+    expect(fs.readFileSync(storagePaths.storagePath, "utf8")).toBe('{"new":true}');
+    expect(fs.existsSync(path.join(legacyRoot, "crypto"))).toBe(false);
+    expect(fs.existsSync(storagePaths.cryptoPath)).toBe(true);
+  });
+
   it("refuses to migrate legacy storage when the snapshot step fails", async () => {
     const stateDir = setupStateDir();
     const storagePaths = resolveMatrixStoragePaths({

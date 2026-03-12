@@ -127,4 +127,54 @@ describe("runStartupMatrixMigration", () => {
       );
     });
   });
+
+  it("downgrades migration step failures to warnings so startup can continue", async () => {
+    await withTempHome(async (home) => {
+      const stateDir = path.join(home, ".openclaw");
+      await fs.mkdir(path.join(stateDir, "matrix"), { recursive: true });
+      await fs.writeFile(path.join(stateDir, "matrix", "bot-storage.json"), '{"legacy":true}');
+      const maybeCreateMatrixMigrationSnapshotMock = vi.fn(async () => ({
+        created: true,
+        archivePath: "/tmp/snapshot.tar.gz",
+        markerPath: "/tmp/migration-snapshot.json",
+      }));
+      const autoMigrateLegacyMatrixStateMock = vi.fn(async () => ({
+        migrated: true,
+        changes: [],
+        warnings: [],
+      }));
+      const autoPrepareLegacyMatrixCryptoMock = vi.fn(async () => {
+        throw new Error("disk full");
+      });
+      const warn = vi.fn();
+
+      await expect(
+        runStartupMatrixMigration({
+          cfg: {
+            channels: {
+              matrix: {
+                homeserver: "https://matrix.example.org",
+                userId: "@bot:example.org",
+                accessToken: "tok-123",
+              },
+            },
+          } as never,
+          env: process.env,
+          deps: {
+            maybeCreateMatrixMigrationSnapshot: maybeCreateMatrixMigrationSnapshotMock,
+            autoMigrateLegacyMatrixState: autoMigrateLegacyMatrixStateMock,
+            autoPrepareLegacyMatrixCrypto: autoPrepareLegacyMatrixCryptoMock,
+          },
+          log: { warn },
+        }),
+      ).resolves.toBeUndefined();
+
+      expect(maybeCreateMatrixMigrationSnapshotMock).toHaveBeenCalledOnce();
+      expect(autoMigrateLegacyMatrixStateMock).toHaveBeenCalledOnce();
+      expect(autoPrepareLegacyMatrixCryptoMock).toHaveBeenCalledOnce();
+      expect(warn).toHaveBeenCalledWith(
+        "gateway: legacy Matrix encrypted-state preparation failed during Matrix migration; continuing startup: Error: disk full",
+      );
+    });
+  });
 });

@@ -121,6 +121,54 @@ describe("matrix legacy encrypted-state migration", () => {
     });
   });
 
+  it("warns instead of throwing when recovery-key persistence fails", async () => {
+    await withTempHome(async (home) => {
+      const stateDir = path.join(home, ".openclaw");
+      const cfg: OpenClawConfig = {
+        channels: {
+          matrix: {
+            homeserver: "https://matrix.example.org",
+            userId: "@bot:example.org",
+            accessToken: "tok-123",
+          },
+        },
+      };
+      const { rootDir } = resolveMatrixAccountStorageRoot({
+        stateDir,
+        homeserver: "https://matrix.example.org",
+        userId: "@bot:example.org",
+        accessToken: "tok-123",
+      });
+      writeFile(path.join(rootDir, "crypto", "bot-sdk.json"), '{"deviceId":"DEVICE123"}');
+
+      const result = await autoPrepareLegacyMatrixCrypto({
+        cfg,
+        env: process.env,
+        deps: {
+          inspectLegacyStore: async () => ({
+            deviceId: "DEVICE123",
+            roomKeyCounts: { total: 12, backedUp: 12 },
+            backupVersion: "1",
+            decryptionKeyBase64: "YWJjZA==",
+          }),
+          writeJsonFileAtomically: async (filePath) => {
+            if (filePath.endsWith("recovery-key.json")) {
+              throw new Error("disk full");
+            }
+            writeFile(filePath, JSON.stringify({ ok: true }, null, 2));
+          },
+        },
+      });
+
+      expect(result.migrated).toBe(false);
+      expect(result.warnings).toContain(
+        `Failed writing Matrix recovery key for account "default" (${path.join(rootDir, "recovery-key.json")}): Error: disk full`,
+      );
+      expect(fs.existsSync(path.join(rootDir, "recovery-key.json"))).toBe(false);
+      expect(fs.existsSync(path.join(rootDir, "legacy-crypto-migration.json"))).toBe(false);
+    });
+  });
+
   it("prepares flat legacy crypto for the only configured non-default Matrix account", async () => {
     await withTempHome(async (home) => {
       const stateDir = path.join(home, ".openclaw");

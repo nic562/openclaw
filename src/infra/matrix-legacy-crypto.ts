@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
-import { writeJsonFileAtomically } from "../plugin-sdk/json-store.js";
+import { writeJsonFileAtomically as writeJsonFileAtomicallyImpl } from "../plugin-sdk/json-store.js";
 import { resolveConfiguredMatrixAccountIds } from "./matrix-account-selection.js";
 import {
   resolveLegacyMatrixFlatStoreTarget,
@@ -70,6 +70,7 @@ type MatrixLegacyCryptoPreparationResult = {
 
 type MatrixLegacyCryptoPrepareDeps = {
   inspectLegacyStore: MatrixLegacyCryptoInspector;
+  writeJsonFileAtomically: typeof writeJsonFileAtomicallyImpl;
 };
 
 type MatrixLegacyBotSdkMetadata = {
@@ -285,8 +286,9 @@ function loadLegacyCryptoMigrationState(filePath: string): MatrixLegacyCryptoMig
 async function persistLegacyMigrationState(params: {
   filePath: string;
   state: MatrixLegacyCryptoMigrationState;
+  writeJsonFileAtomically: typeof writeJsonFileAtomicallyImpl;
 }): Promise<void> {
-  await writeJsonFileAtomically(params.filePath, params.state);
+  await params.writeJsonFileAtomically(params.filePath, params.state);
 }
 
 export function detectLegacyMatrixCrypto(params: {
@@ -325,6 +327,8 @@ export async function autoPrepareLegacyMatrixCrypto(params: {
   const warnings = [...detection.warnings];
   const changes: string[] = [];
   let inspectLegacyStore = params.deps?.inspectLegacyStore;
+  const writeJsonFileAtomically =
+    params.deps?.writeJsonFileAtomically ?? writeJsonFileAtomicallyImpl;
   if (!inspectLegacyStore) {
     try {
       inspectLegacyStore = await loadMatrixLegacyCryptoInspector({
@@ -394,11 +398,17 @@ export async function autoPrepareLegacyMatrixCrypto(params: {
           keyId: null,
           privateKeyBase64: summary.decryptionKeyBase64,
         };
-        await writeJsonFileAtomically(plan.recoveryKeyPath, payload);
-        changes.push(
-          `Imported Matrix legacy backup key for account "${plan.accountId}": ${plan.recoveryKeyPath}`,
-        );
-        decryptionKeyImported = true;
+        try {
+          await writeJsonFileAtomically(plan.recoveryKeyPath, payload);
+          changes.push(
+            `Imported Matrix legacy backup key for account "${plan.accountId}": ${plan.recoveryKeyPath}`,
+          );
+          decryptionKeyImported = true;
+        } catch (err) {
+          warnings.push(
+            `Failed writing Matrix recovery key for account "${plan.accountId}" (${plan.recoveryKeyPath}): ${String(err)}`,
+          );
+        }
       } else {
         decryptionKeyImported = true;
       }
@@ -425,6 +435,14 @@ export async function autoPrepareLegacyMatrixCrypto(params: {
         `Legacy Matrix encrypted state for account "${plan.accountId}" cannot be fully converted automatically because the old rust crypto store does not expose all local room keys for export.`,
       );
     }
+    // If recovery-key persistence failed, leave the migration state absent so the next startup can retry.
+    if (
+      summary.decryptionKeyBase64 &&
+      !decryptionKeyImported &&
+      !loadStoredRecoveryKey(plan.recoveryKeyPath)
+    ) {
+      continue;
+    }
 
     const state: MatrixLegacyCryptoMigrationState = {
       version: 1,
@@ -438,10 +456,20 @@ export async function autoPrepareLegacyMatrixCrypto(params: {
       detectedAt: new Date().toISOString(),
       lastError: null,
     };
-    await persistLegacyMigrationState({ filePath: plan.statePath, state });
-    changes.push(
-      `Prepared Matrix legacy encrypted-state migration for account "${plan.accountId}": ${plan.statePath}`,
-    );
+    try {
+      await persistLegacyMigrationState({
+        filePath: plan.statePath,
+        state,
+        writeJsonFileAtomically,
+      });
+      changes.push(
+        `Prepared Matrix legacy encrypted-state migration for account "${plan.accountId}": ${plan.statePath}`,
+      );
+    } catch (err) {
+      warnings.push(
+        `Failed writing Matrix legacy encrypted-state migration record for account "${plan.accountId}" (${plan.statePath}): ${String(err)}`,
+      );
+    }
   }
 
   if (changes.length > 0) {
