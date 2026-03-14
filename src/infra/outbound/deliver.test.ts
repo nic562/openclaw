@@ -288,7 +288,7 @@ describe("deliverOutboundPayloads", () => {
     );
   });
 
-  it("prefixes BTW replies for telegram delivery", async () => {
+  it("formats BTW replies prominently for telegram delivery", async () => {
     const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "c1" });
 
     await deliverTelegramPayload({
@@ -301,7 +301,7 @@ describe("deliverOutboundPayloads", () => {
 
     expect(sendTelegram).toHaveBeenCalledWith(
       "123",
-      "BTW: 323",
+      "BTW\nQuestion: what is 17 * 19?\n\n323",
       expect.objectContaining({ verbose: false, textMode: "html" }),
     );
   });
@@ -743,7 +743,7 @@ describe("deliverOutboundPayloads", () => {
     ]);
   });
 
-  it("prefixes BTW replies for whatsapp delivery", async () => {
+  it("formats BTW replies prominently for whatsapp delivery", async () => {
     const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
 
     await deliverWhatsAppPayload({
@@ -751,7 +751,11 @@ describe("deliverOutboundPayloads", () => {
       payload: { text: "323", btw: { question: "what is 17 * 19?" } },
     });
 
-    expect(sendWhatsApp).toHaveBeenCalledWith("+1555", "BTW: 323", expect.any(Object));
+    expect(sendWhatsApp).toHaveBeenCalledWith(
+      "+1555",
+      "BTW\nQuestion: what is 17 * 19?\n\n323",
+      expect.any(Object),
+    );
   });
 
   it("continues on errors when bestEffort is enabled", async () => {
